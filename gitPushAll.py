@@ -240,7 +240,8 @@ def find_git_repos(scan_dirs):
         except PermissionError:
             write_log(f"Permission denied: {scan_path}", LOG_FILE)
 
-    return sorted(repos)
+    # Alphabetical by repository name (basename), case-insensitive
+    return sorted(repos, key=lambda p: os.path.basename(p).lower())
 
 
 def get_repo_status(repo_path):
