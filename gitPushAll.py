@@ -421,7 +421,7 @@ def display_all_repos(all_repos_status):
     print("\n")
 
     # Print custom table with row color coding
-    headers = ["#", "Repository", "Branch", "Modified", "Added", "Deleted", "Total"]
+    headers = ["#", "Repository", "Branch", "M", "A", "D", "T"]
     align = ['center', 'left', 'left', 'center', 'center', 'center', 'center']
 
     # Calculate column widths
@@ -505,7 +505,7 @@ def display_repos_summary(repos_with_changes):
     print(color_text(f"\n{len(repos_with_changes)} repositories with changes:", BRIGHT_YELLOW, style=BOLD))
     print()
 
-    headers = ["#", "Repository", "Branch", "Modified", "Added", "Deleted", "Total"]
+    headers = ["#", "Repository", "Branch", "M", "A", "D", "T"]
     rows = []
 
     for idx, repo in enumerate(repos_with_changes, 1):
