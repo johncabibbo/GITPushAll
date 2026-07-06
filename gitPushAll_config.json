@@ -15,5 +15,6 @@
     "auto_push": true,
     "dry_run_first": false,
     "successAudio": "https://cb9-09.s3.us-east-1.amazonaws.com/siteaudio/beep-10.wav",
-    "failureAudio": "~/Documents/script/gitPushAll/audio/tunetank.com_bad-file.wav"
+    "failureAudio": "~/Documents/script/gitPushAll/audio/tunetank.com_bad-file.wav",
+    "monitor_interval": 60
 }

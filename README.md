@@ -1,150 +1,112 @@
 # Git Push All
 
-**Commit and push every Git repo across your machine in one pass.**
+Batch commit and push tool for multiple Git repositories.
 
-`gitPushAll.py` auto-discovers Git repositories under the directories you configure, shows each one's status (color-coded: changes vs. clean), and lets you commit and push them all in a single batch. It supports a preview, custom or auto-timestamped commit messages, a dry-run mode, and a fully non-interactive `--auto` mode for calling from other scripts. CB9Lib is bundled.
+## Project Information
 
----
+- **Version:** 2.02
+- **Category:** Git Tool
+- **OS:** Mac/Linux
+- **Maintainer:** Cloud Box 9 Inc.
 
-## Table of Contents
+## Description
 
-1. [Overview](#overview)
-2. [Features](#features)
-3. [Requirements](#requirements)
-4. [Installation](#installation)
-5. [Alias Setup — Run From Anywhere](#alias-setup--run-from-anywhere)
-6. [Configuration](#configuration)
-7. [Usage & Examples](#usage--examples)
-8. [Troubleshooting](#troubleshooting)
-9. [License / Copyright](#license--copyright)
-
----
-
-## Overview
-
-If you keep many small repos (scripts, sites, notes), committing them one by one is tedious. Git Push All scans your configured folders, finds every repo, and pushes them together — great for an end-of-day sweep or an automated backup step.
-
----
+Git Push All is a batch processing tool that automatically discovers Git repositories, checks for uncommitted changes, and allows batch commit and push operations across multiple repositories with a single command.
 
 ## Features
 
-- **Auto-discovery** — finds Git repos under your `scan_directories` (deduplicated by real path).
-- **Status overview** — every repo listed; yellow = uncommitted changes, white = clean.
-- **Batch commit + push** — handle all dirty repos at once.
-- **Preview** — see what changed before committing.
-- **Commit messages** — custom, or auto-timestamped (`Auto-commit: {timestamp}`).
-- **Dry-run mode** — rehearse without touching anything.
-- **`--auto` mode** — non-interactive; used by Backup42 and other scripts.
-- **Logging** — detailed run log, openable from the menu (`[L]`).
+- **Auto-Discovery** - Finds all Git repositories in configured directories
+- **Color-Coded Status** - Yellow for repos with changes, white for clean
+- **All Repos Display** - Shows every repository, not just those with changes
+- **Monitor Mode** - `[M]` live-refreshes the status table every 60s (configurable via `monitor_interval`); press any key to return to the menu
+- **Batch Operations** - Commit and push multiple repos at once
+- **Preview Changes** - View changes before committing
+- **Auto-Timestamped Messages** - Generate commit messages automatically
+- **Custom Messages** - Option for manual commit messages
+- **Dry-Run Mode** - Test operations without making changes
+- **Detailed Logging** - Track all operations with timestamps
+- **Single-Line Menu** - Clean, efficient interface
 
----
+## Scripts
 
-## Requirements
+### gitPushAll.py
+Main batch Git operations manager.
 
-| Requirement | Notes |
-|-------------|-------|
-| **macOS / Linux** | Unix terminal for the menu. |
-| **Python 3.10+** | CB9Lib is **bundled** — no separate install. |
-| **git** | Must be installed and on your `PATH`, with push credentials configured. |
-
----
-
-## Installation
-
+**Usage:**
 ```bash
-git clone <REPOSITORY_URL> GITPushAll
-cd GITPushAll
 python3 gitPushAll.py
 ```
 
----
+**Interactive Menu Options:**
+- **[A]** - Commit & Push All (repos with changes)
+- **[M]** - Monitor: auto-refresh the status table every 60s; press any key to return
+- **[V]** - View Changes (detailed diff for each repo)
+- **[L]** - Log (open the log file)
+- **[Q/Enter]** - Quit
 
-## Alias Setup — Run From Anywhere
+**Commit Message Prompt:**
+Type a custom message or press Enter for auto-generated timestamp message.
 
-Launch from any directory by typing `gitpushall`.
+Auto-generated format: `YYYY-MM-DD_HHam/pm`  
+Example: `2026-01-09_03pm`
 
-### macOS / Linux (zsh or bash)
+All commits include Claude Code attribution footer automatically.
 
-Add to `~/.zshrc` or `~/.bashrc`:
+## Requirements
 
-```bash
-alias gitpushall='python3 ~/path/to/GITPushAll/gitPushAll.py'
-```
-
-Reload and run:
-
-```bash
-source ~/.zshrc
-gitpushall
-```
-
-> **Windows:** not supported natively (Unix terminal). Use **WSL** and the Linux steps.
-
----
+- Python 3.10+
+- CB9Lib (Cloud Box 9 Python Library)
+- Git command-line tools
+- Configuration file: gitPushAll_config.json
 
 ## Configuration
 
-Edit **`gitPushAll_config.json`**:
+The configuration file (gitPushAll_config.json) defines:
+- Scan directories to search for Git repositories
+- Excluded repositories (optional)
+- Default commit message format
+- Auto-push settings
+- Dry-run preferences
 
-```json
-{
-  "scan_directories": [
-    "~/Documents/script",
-    "~/Documents/sites",
-    "~/Documents/devNotes"
-  ],
-  "excluded_repos": [],
-  "default_commit_message": "Auto-commit: {timestamp}",
-  "auto_push": true,
-  "dry_run_first": false,
-  "successAudio": "https://.../beep.wav",
-  "failureAudio": "~/path/to/GITPushAll/audio/bad-file.wav"
-}
-```
+### Default Scan Directories
+- ~/Documents/script
+- ~/Documents/sites
 
-| Key | Description |
-|-----|-------------|
-| `scan_directories[]` | Folders to search for Git repos. |
-| `excluded_repos[]` | Repos to skip. |
-| `default_commit_message` | Template; `{timestamp}` is substituted. |
-| `auto_push` | Push after committing. |
-| `dry_run_first` | Preview before doing anything. |
-| `successAudio` / `failureAudio` | Optional sounds on completion. |
+## Repository Status Display
 
----
+The tool displays all repositories in a formatted table:
 
-## Usage & Examples
+| # | Repository | Branch | Modified | Added | Deleted | Total |
+|---|------------|--------|----------|-------|---------|-------|
+| Color-coded rows indicate status:
+- **Yellow** - Repository has uncommitted changes
+- **White** - Repository is clean (no changes)
 
-```bash
-python3 gitPushAll.py                       # interactive menu
-python3 gitPushAll.py --auto "Nightly sync" # non-interactive: commit+push all dirty repos
-```
+## Batch Operations
 
-**Cron example — nightly at 11 PM:**
+When committing all repos with changes:
+1. Displays summary of repos to be committed
+2. Prompts for commit message (or Enter for auto-timestamp)
+3. Confirms before proceeding
+4. Processes each repository sequentially
+5. Shows success/failure status for each
+6. Displays final summary with counts
 
-```cron
-0 23 * * * /usr/bin/python3 ~/path/to/GITPushAll/gitPushAll.py --auto "Nightly" >> ~/Documents/log/gitPushAll.log 2>&1
-```
+## Logging
 
----
+- Log file: ~/Documents/logs/gitPushAll.log
+- Tracks all operations with timestamps
+- Records successes and failures
+- Includes error details for troubleshooting
 
-## Troubleshooting
+## Git Best Practices
 
-| Symptom | Fix |
-|---------|-----|
-| A repo isn't found | Confirm it's under a `scan_directories` path and not in `excluded_repos`. |
-| Push fails / asks for a password | Configure Git credentials (SSH keys or a credential helper). |
-| A repo is listed twice | Fixed in v1.9 (dedup by real path); ensure you're on the current version. |
-| Nothing to push | Repos with no changes are shown white/clean and skipped. |
+The tool follows git best practices:
+- No force push operations
+- Hooks are enabled (not skipped)
+- Proper commit message formatting
+- Sequential repository processing
 
----
+## Copyright
 
-## License / Copyright
-
----
-**Version:** 1.9
-**Author:** Cloud Box 9 Inc.
-**Maintainer / Owner:** Cloud Box 9 Inc.
-**Last Updated:** Jul 5, 2026
-
-Copyright © 2026 Cloud Box 9 Inc. All rights reserved.
+Copyright © 2025 Cloud Box 9 Inc. All rights reserved.

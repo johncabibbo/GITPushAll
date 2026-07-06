@@ -2,8 +2,8 @@
 # =============================================================================
 # Filename: gitPushAll.py
 # Project: Git Push All
-# Version: 1.9
-# Last Modified Date: 2026-04-05
+# Version: 2.02
+# Last Modified Date: 2026-07-06
 # Category: Tool
 # OS: Mac/Linux
 # Maintainer: Cloud Box 9
@@ -24,6 +24,23 @@
 #     • Single-line menu navigation
 #
 # Version History:
+#   v2.02 (2026-07-06):
+#     • Added [M] Monitor menu option: live-refreshes the repository status
+#       table every 60s (config: monitor_interval) with a countdown; pressing
+#       any key exits the loop and returns to the menu (_read_key_timeout()).
+#     • Main menu now stays open even when all repos are clean, so Monitor is
+#       reachable anytime; [A]/[V] report "nothing to do" when there are no
+#       changes instead of the script exiting.
+#   v2.01 (2026-07-05):
+#     • Repo tables (display_all_repos, display_repos_summary) now show a
+#       "Folder" column immediately after "Branch" with the repo's local path
+#       (home abbreviated to ~ via new short_path() helper)
+#   v2.0 (2026-07-05):
+#     • After choosing [A] Commit & Push All, prompt for how to enter commit
+#       messages: 1) Continue With Generated Message, 2) Enter One Message for
+#       All Repos, 3) Enter Individual Messages for Each Repo
+#     • commit_all_repos() now builds a per-repo message map and commits each
+#       repo with its own message (option 3) or a shared one (options 1/2)
 #   v1.9 (2026-04-05):
 #     • find_git_repos(): deduplicate results using os.path.realpath so a repo
 #       appearing under multiple scan_directories is only counted once
@@ -77,11 +94,20 @@ import sys
 import json
 import subprocess
 import shutil
+import time
 from datetime import datetime
 from pathlib import Path
 
+# Unix single-keypress support (for Monitor mode). Mac/Linux only.
+try:
+    import select
+    import termios
+    import tty
+    _RAWKEY_OK = True
+except ImportError:
+    _RAWKEY_OK = False
+
 # CB9Lib imports
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))  # bundled CB9Lib (self-contained)
 from CB9Lib.colors import (
     color_text, RED, GREEN, YELLOW, BLUE, CYAN, MAGENTA, WHITE,
     BRIGHT_RED, BRIGHT_GREEN, BRIGHT_YELLOW, BRIGHT_BLUE,
@@ -101,7 +127,7 @@ from CB9Lib.globals import LOG_DIR
 # Global Constants
 # -----------------------------------------------------------------------------
 SCRIPT_NAME = "Git Push All"
-VERSION = "v1.8"
+VERSION = "v2.02"
 CONFIG_FILE = None
 LOG_FILE = None
 
@@ -172,7 +198,8 @@ def create_default_config():
         "excluded_repos": [],
         "default_commit_message": "Auto-commit: {timestamp}",
         "auto_push": True,
-        "dry_run_first": False
+        "dry_run_first": False,
+        "monitor_interval": 60
     }
 
     save_json_config(CONFIG_FILE, default_config)
@@ -398,6 +425,16 @@ def commit_and_push_repo(repo_info, commit_message, dry_run=False):
 # Display Functions
 # -----------------------------------------------------------------------------
 
+def short_path(path):
+    """Return a repo's local folder path with the home directory abbreviated to ~."""
+    home = os.path.expanduser("~")
+    if path == home:
+        return "~"
+    if path.startswith(home + os.sep):
+        return "~" + path[len(home):]
+    return path
+
+
 def display_all_repos(all_repos_status):
     """
     Display table of all repositories with color coding.
@@ -422,8 +459,8 @@ def display_all_repos(all_repos_status):
     print("\n")
 
     # Print custom table with row color coding
-    headers = ["#", "Repository", "Branch", "M", "A", "D", "T"]
-    align = ['center', 'left', 'left', 'center', 'center', 'center', 'center']
+    headers = ["#", "Repository", "Branch", "Folder", "M", "A", "D", "T"]
+    align = ['center', 'left', 'left', 'left', 'center', 'center', 'center', 'center']
 
     # Calculate column widths
     col_widths = [len(str(h)) for h in headers]
@@ -434,6 +471,7 @@ def display_all_repos(all_repos_status):
             str(all_repos_status.index(repo) + 1),
             repo['name'],
             repo['branch'],
+            short_path(repo['path']),
             str(repo['modified']),
             str(repo['added']),
             str(repo['deleted']),
@@ -467,6 +505,7 @@ def display_all_repos(all_repos_status):
             str(idx),
             repo['name'],
             repo['branch'],
+            short_path(repo['path']),
             str(repo['modified']),
             str(repo['added']),
             str(repo['deleted']),
@@ -506,7 +545,7 @@ def display_repos_summary(repos_with_changes):
     print(color_text(f"\n{len(repos_with_changes)} repositories with changes:", BRIGHT_YELLOW, style=BOLD))
     print()
 
-    headers = ["#", "Repository", "Branch", "M", "A", "D", "T"]
+    headers = ["#", "Repository", "Branch", "Folder", "M", "A", "D", "T"]
     rows = []
 
     for idx, repo in enumerate(repos_with_changes, 1):
@@ -514,13 +553,14 @@ def display_repos_summary(repos_with_changes):
             str(idx),
             repo['name'],
             repo['branch'],
+            short_path(repo['path']),
             str(repo['modified']),
             str(repo['added']),
             str(repo['deleted']),
             str(repo['total_changes'])
         ])
 
-    print_table(headers, rows, align=['center', 'left', 'left', 'center', 'center', 'center', 'center'])
+    print_table(headers, rows, align=['center', 'left', 'left', 'left', 'center', 'center', 'center', 'center'])
     print()
 
 
@@ -560,6 +600,93 @@ def display_repo_changes(repo_info):
             print(color_text(f"  [{status}]  {filename}", WHITE))
 
     print()
+
+
+# -----------------------------------------------------------------------------
+# Monitor Mode
+# -----------------------------------------------------------------------------
+
+def _read_key_timeout(timeout):
+    """Wait up to `timeout` seconds for a single keypress (no Enter required).
+
+    Returns the character pressed, or None if the timeout elapsed. Puts the
+    terminal in cbreak mode so a single key is read immediately. Falls back to
+    a plain sleep when raw-key support is unavailable or stdin isn't a TTY.
+    """
+    if not _RAWKEY_OK or not sys.stdin.isatty():
+        time.sleep(max(0, timeout))
+        return None
+    fd = sys.stdin.fileno()
+    old = termios.tcgetattr(fd)
+    try:
+        tty.setcbreak(fd)
+        ready, _, _ = select.select([fd], [], [], timeout)
+        if ready:
+            return os.read(fd, 1).decode('utf-8', errors='replace')
+    finally:
+        termios.tcsetattr(fd, termios.TCSADRAIN, old)
+    return None
+
+
+def _flush_input():
+    """Discard any pending/unread bytes on stdin (e.g. arrow-key remnants)."""
+    if _RAWKEY_OK and sys.stdin.isatty():
+        try:
+            termios.tcflush(sys.stdin.fileno(), termios.TCIFLUSH)
+        except Exception:
+            pass
+
+
+def monitor_repos(config):
+    """Live-monitor screen: re-scan and redraw the repo status table on a fixed
+    interval (default 60s, config key 'monitor_interval'). A countdown shows the
+    time to the next refresh; pressing ANY key exits back to the main menu.
+    """
+    try:
+        interval = int(config.get('monitor_interval', 60))
+    except (TypeError, ValueError):
+        interval = 60
+    if interval < 1:
+        interval = 60
+
+    while True:
+        clear_screen()
+        header(SCRIPT_NAME, VERSION, subtitle="Monitor — auto-refresh")
+
+        # Re-scan repositories and their status on every refresh
+        repos = find_git_repos(config['scan_directories'])
+        all_repos_status = []
+        for repo in repos:
+            status = get_repo_status(repo)
+            if status:
+                all_repos_status.append(status)
+
+        display_all_repos(all_repos_status)
+
+        updated = datetime.now().strftime("%-I:%M:%S %p").lower()
+        width = shutil.get_terminal_size().columns
+        print()
+        print("-" * width)
+
+        # Countdown to next refresh; any keypress returns to the menu
+        key = None
+        for remaining in range(interval, 0, -1):
+            status_line = (
+                color_text("● Monitoring", BRIGHT_GREEN, style=BOLD) +
+                color_text(f"   Last updated {updated}", DIM) +
+                color_text(f"   •   next refresh in {remaining:2d}s", CYAN) +
+                color_text("   •   press any key to return to menu", BRIGHT_YELLOW)
+            )
+            sys.stdout.write("\r\033[K" + status_line)
+            sys.stdout.flush()
+            key = _read_key_timeout(1)
+            if key is not None:
+                break
+
+        if key is not None:
+            _flush_input()   # drop any trailing bytes so they don't leak into the menu prompt
+            print()          # move the cursor off the status line
+            return
 
 
 # -----------------------------------------------------------------------------
@@ -605,16 +732,12 @@ def main_menu(config):
         # Display all repos with color coding
         display_all_repos(all_repos_status)
 
-        if not repos_with_changes:
-            print()
-            input(color_text("Press Enter to exit...", YELLOW))
-            break
-
-        # Menu options on one line
+        # Menu options on one line (always shown — Monitor works even when clean)
         width = shutil.get_terminal_size().columns
         print("-" * width)
         legend = (
             color_text("[A]", BRIGHT_YELLOW, style=BOLD) + " Commit & Push All  " +
+            color_text("[M]", BRIGHT_YELLOW, style=BOLD) + " Monitor  " +
             color_text("[V]", BRIGHT_YELLOW, style=BOLD) + " View Changes  " +
             color_text("[L]", BRIGHT_YELLOW, style=BOLD) + " Log  " +
             color_text("[Q/Enter]", BRIGHT_YELLOW, style=BOLD) + " Quit"
@@ -627,9 +750,19 @@ def main_menu(config):
         if choice == 'q' or choice == '':
             break
         elif choice == 'a':
-            commit_all_repos(repos_with_changes, config)
+            if repos_with_changes:
+                commit_all_repos(repos_with_changes, config)
+            else:
+                print(color_text("\n✓ Nothing to commit — all repositories are clean.", GREEN, style=BOLD))
+                input(color_text("\nPress Enter to return to menu...", YELLOW))
+        elif choice == 'm':
+            monitor_repos(config)
         elif choice == 'v':
-            view_changes_menu(repos_with_changes)
+            if repos_with_changes:
+                view_changes_menu(repos_with_changes)
+            else:
+                print(color_text("\n✓ No changes to view — all repositories are clean.", GREEN, style=BOLD))
+                input(color_text("\nPress Enter to return to menu...", YELLOW))
         elif choice == 'l':
             if LOG_FILE and os.path.exists(LOG_FILE):
                 print(color_text(f"Opening {LOG_FILE} in default editor...", YELLOW))
@@ -652,19 +785,53 @@ def commit_all_repos(repos_with_changes, config):
 
     display_repos_summary(repos_with_changes)
 
-    # Get commit message
-    commit_message = input(color_text("Enter a Custom Message or Press Enter: ", WHITE, style=BOLD)).strip()
-
-    if not commit_message:
-        # User pressed Enter - use auto-generated timestamp
-        timestamp = datetime.now().strftime("%Y-%m-%d_%I%p").lower()
-        commit_message = timestamp
-
-    # Add Claude Code footer
-    commit_message += "\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)\n\nCo-Authored-By: Claude <noreply@anthropic.com>"
-
+    # Ask how commit messages should be entered
     print()
-    print(color_text(f"Commit message: {commit_message.split(chr(10))[0]}", CYAN))
+    print(color_text("Commit message options:", WHITE, style=BOLD))
+    print(color_text("  1. Continue With Generated Message", WHITE))
+    print(color_text("  2. Enter One Message for All Repos", WHITE))
+    print(color_text("  3. Enter Individual Messages for Each Repo", WHITE))
+    print()
+    msg_choice = input(color_text("Option [1]: ", WHITE, style=BOLD)).strip().lower()
+
+    if msg_choice in ('q', 'quit', 'esc'):
+        print(color_text("Cancelled", YELLOW))
+        pause()
+        return
+
+    # Auto-generated timestamp message (default and per-repo fallback)
+    generated = datetime.now().strftime("%Y-%m-%d_%I%p").lower()
+
+    # Build a per-repo message map (repo path -> message, before footer)
+    messages = {}
+    if msg_choice == '2':
+        one_message = input(color_text("Enter one message for all repos (Enter = generated): ", WHITE, style=BOLD)).strip()
+        base = one_message if one_message else generated
+        for r in repos_with_changes:
+            messages[r['path']] = base
+    elif msg_choice == '3':
+        print()
+        print(color_text("Enter a message for each repo (Enter = generated message):", CYAN))
+        for r in repos_with_changes:
+            entered = input(color_text(f"  [{r['name']}]: ", WHITE, style=BOLD)).strip()
+            messages[r['path']] = entered if entered else generated
+    else:
+        # Option 1 (default / blank): generated message for every repo
+        for r in repos_with_changes:
+            messages[r['path']] = generated
+
+    # Claude Code footer appended to every commit message
+    footer = "\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)\n\nCo-Authored-By: Claude <noreply@anthropic.com>"
+
+    # Preview the message(s)
+    print()
+    if msg_choice == '3':
+        print(color_text("Commit messages:", CYAN, style=BOLD))
+        for r in repos_with_changes:
+            print(color_text(f"  {r['name']}: {messages[r['path']].splitlines()[0]}", CYAN))
+    else:
+        sample = next(iter(messages.values()), generated)
+        print(color_text(f"Commit message: {sample.splitlines()[0]}", CYAN))
     print()
 
     if not confirm("Proceed with commit and push?", default=True):
@@ -679,8 +846,9 @@ def commit_all_repos(repos_with_changes, config):
 
     results = []
     for repo_info in repos_with_changes:
+        full_message = messages[repo_info['path']] + footer
         print(f"[{repo_info['name']}] ", end='')
-        result = commit_and_push_repo(repo_info, commit_message)
+        result = commit_and_push_repo(repo_info, full_message)
         results.append(result)
 
         if result['success']:
